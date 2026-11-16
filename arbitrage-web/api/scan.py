@@ -149,9 +149,10 @@ def analyse(snapshot, gas_gwei):
     return output
 
 def scan(params):
-    url = os.environ.get("ETH_RPC","").strip()
+    # Prefer the dedicated Alchemy secret; keep legacy ETH_RPC compatibility.
+    url = (os.environ.get("ALCHEMY_API_KEY") or os.environ.get("ETH_RPC") or "").strip()
     if not url:
-        return 503, {"error":"RPC not configured. Add ETH_RPC in Vercel environment settings."}
+        return 503, {"error":"Alchemy not configured. Add ALCHEMY_API_KEY (or ETH_RPC) as a private Vercel environment variable.", "category":"configuration"}
     if not url.startswith("https://"):
         # Accept a raw Alchemy app key configured as a sensitive server-side variable.
         # Never expose the constructed URL or secret in responses or logs.
