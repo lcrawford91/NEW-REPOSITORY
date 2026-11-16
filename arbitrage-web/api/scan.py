@@ -1,6 +1,7 @@
 """Read-only historical Ethereum V2 reserve scanner. Never signs or broadcasts transactions."""
 import json
 import os
+import re
 from pathlib import Path
 import urllib.request
 from http.server import BaseHTTPRequestHandler
@@ -100,7 +101,12 @@ def scan(params):
     if not url:
         return 503, {"error":"RPC not configured. Add ETH_RPC in Vercel environment settings."}
     if not url.startswith("https://"):
-        return 503, {"error":"ETH_RPC must be an HTTPS URL."}
+        # Accept a raw Alchemy app key configured as a sensitive server-side variable.
+        # Never expose the constructed URL or secret in responses or logs.
+        if re.fullmatch(r"[A-Za-z0-9_-]{16,128}", url):
+            url = "https://eth-mainnet.g.alchemy.com/v2/" + url
+        else:
+            return 503, {"error":"ETH_RPC must be an Alchemy API key or a full HTTPS Ethereum RPC endpoint."}
     try:
         block = int(params.get("block",["25733035"])[0])
         gas = int(params.get("gas_gwei",["10"])[0])
