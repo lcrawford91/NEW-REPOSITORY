@@ -59,7 +59,7 @@ def rpc(url, method, params):
         except Exception:
             msg = ""
         category, explanation, http_status = rpc_error_category(status=status, message=msg)
-        raise RpcFailure(category, explanation, http_status) from None
+        raise RpcFailure(category, explanation + " (upstream HTTP " + str(status) + " during " + method + ")", http_status) from None
     except (urllib.error.URLError, socket.timeout, TimeoutError) as exc:
         reason = getattr(exc, "reason", exc)
         if isinstance(reason, socket.gaierror) or "name resolution" in str(reason).lower():
