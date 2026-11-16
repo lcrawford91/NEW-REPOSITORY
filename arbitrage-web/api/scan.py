@@ -33,6 +33,8 @@ class RpcFailure(Exception):
 def rpc_error_category(status=None, code=None, message=""):
     # Never return provider messages verbatim: they may contain API credentials.
     m = str(message).lower()
+    if status in (404, 405, 501):
+        return "invalid_endpoint", "ETH_RPC points to an address that does not support Ethereum JSON-RPC POST. Use the full Alchemy Ethereum Mainnet HTTPS endpoint including /v2/<API_KEY>.", 502
     if status in (401, 403) or "invalid api key" in m or "invalid app key" in m or "unauthorized" in m or "invalid token" in m or "must be authenticated" in m:
         return "authentication", "Alchemy rejected the RPC credentials. Rotate the API key and update ETH_RPC.", 502
     if status == 429 or code == 429 or "rate limit" in m or "too many requests" in m or "capacity" in m or "compute units" in m:
