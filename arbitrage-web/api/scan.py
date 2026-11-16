@@ -1,6 +1,7 @@
 """Read-only historical Ethereum V2 reserve scanner. Never signs or broadcasts transactions."""
 import json
 import os
+from pathlib import Path
 import urllib.request
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
@@ -117,13 +118,24 @@ def scan(params):
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
-        if parsed.path != "/api/scan":
-            status,data = 404,{"error":"Not found"}
+        if parsed.path == "/":
+            page = Path(__file__).resolve().parent.parent / "index.html"
+            try:
+                body = page.read_bytes()
+                status = 200
+            except OSError:
+                body = b"Website assets unavailable"
+                status = 503
+            content_type = "text/html; charset=utf-8"
         else:
-            status,data = scan(parse_qs(parsed.query))
-        body = json.dumps(data).encode()
+            if parsed.path != "/api/scan":
+                status,data = 404,{"error":"Not found"}
+            else:
+                status,data = scan(parse_qs(parsed.query))
+            body = json.dumps(data).encode()
+            content_type = "application/json; charset=utf-8"
         self.send_response(status)
-        self.send_header("Content-Type","application/json; charset=utf-8")
+        self.send_header("Content-Type",content_type)
         self.send_header("Cache-Control","no-store")
         self.send_header("X-Content-Type-Options","nosniff")
         self.send_header("Content-Length",str(len(body)))
