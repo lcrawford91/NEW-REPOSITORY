@@ -4,6 +4,8 @@ import os
 import re
 from pathlib import Path
 import urllib.request
+import urllib.error
+import socket
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
@@ -22,13 +24,61 @@ def word(addr):
     int(addr[2:], 16)
     return addr[2:].lower().zfill(64)
 
+class RpcFailure(Exception):
+    def __init__(self, category, message, http_status=502):
+        super().__init__(message)
+        self.category = category
+        self.http_status = http_status
+
+def rpc_error_category(status=None, code=None, message=""):
+    # Never return provider messages verbatim: they may contain API credentials.
+    m = str(message).lower()
+    if status in (401, 403) or "invalid api key" in m or "invalid app key" in m or "unauthorized" in m or "invalid token" in m or "must be authenticated" in m:
+        return "authentication", "Alchemy rejected the RPC credentials. Rotate the API key and update ETH_RPC.", 502
+    if status == 429 or code == 429 or "rate limit" in m or "too many requests" in m or "capacity" in m or "compute units" in m:
+        return "rate_limit", "RPC rate or capacity limit reached; check provider quota.", 503
+    if "archive" in m or "historical state" in m or "missing trie node" in m or "state unavailable" in m or "state is not available" in m or "pruned" in m or "not available at block" in m:
+        return "archive_unavailable", "Provider cannot serve historical state for that block; check archive access.", 502
+    if status and status >= 500:
+        return "provider_unavailable", "Ethereum RPC provider returned a server error.", 502
+    return "rpc_rejected", "Ethereum RPC rejected the request; verify endpoint, network and provider access.", 502
+
 def rpc(url, method, params):
     payload = json.dumps({"jsonrpc":"2.0","id":1,"method":method,"params":params}).encode()
     req = urllib.request.Request(url, data=payload, headers={"Content-Type":"application/json"}, method="POST")
-    with urllib.request.urlopen(req, timeout=12) as response:
-        result = json.load(response)
-    if "error" in result or "result" not in result:
-        raise RuntimeError("Archive RPC returned an error")
+    try:
+        with urllib.request.urlopen(req, timeout=12) as response:
+            result = json.load(response)
+    except urllib.error.HTTPError as exc:
+        status = exc.code
+        try:
+            raw = exc.read(2048)
+            data = json.loads(raw)
+            err = data.get("error", {}) if isinstance(data, dict) else {}
+            msg = err.get("message", "") if isinstance(err, dict) else ""
+        except Exception:
+            msg = ""
+        category, explanation, http_status = rpc_error_category(status=status, message=msg)
+        raise RpcFailure(category, explanation, http_status) from None
+    except (urllib.error.URLError, socket.timeout, TimeoutError) as exc:
+        reason = getattr(exc, "reason", exc)
+        if isinstance(reason, socket.gaierror) or "name resolution" in str(reason).lower():
+            raise RpcFailure("dns", "Cannot resolve the RPC provider hostname.") from None
+        if isinstance(reason, (socket.timeout, TimeoutError)) or "timed out" in str(reason).lower():
+            raise RpcFailure("timeout", "RPC provider did not respond before timeout.", 504) from None
+        raise RpcFailure("connection", "Cannot connect to the RPC provider.") from None
+    except (ValueError, json.JSONDecodeError):
+        raise RpcFailure("invalid_json", "RPC provider returned invalid JSON.") from None
+    if not isinstance(result, dict):
+        raise RpcFailure("invalid_response", "RPC returned an unexpected response.")
+    if "error" in result:
+        err = result.get("error")
+        code = err.get("code") if isinstance(err, dict) else None
+        msg = err.get("message", "") if isinstance(err, dict) else ""
+        category, explanation, http_status = rpc_error_category(code=code, message=msg)
+        raise RpcFailure(category, explanation, http_status)
+    if "result" not in result:
+        raise RpcFailure("missing_result", "RPC response has no result field.")
     return result["result"]
 
 def call(url, addr, data, block):
@@ -116,10 +166,12 @@ def scan(params):
         return 200, {"mode":"READ_ONLY_HISTORICAL_RESERVE_SCREEN",
                       "warning":"Indicative historical reserve estimates only, not executable or realised profits.",
                       "snapshot":snap,"results":analyse(snap,gas)}
+    except RpcFailure as exc:
+        return exc.http_status, {"error":str(exc), "category":exc.category}
     except (ValueError,TypeError):
-        return 400, {"error":"Invalid block, RPC chain, or historical pool data"}
+        return 400, {"error":"Invalid block, RPC chain, or historical pool data", "category":"validation"}
     except Exception:
-        return 502, {"error":"Ethereum archive RPC query failed. Check archive access and provider status."}
+        return 502, {"error":"Historical scanner encountered an internal error.", "category":"internal"}
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
